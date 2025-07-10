@@ -1,0 +1,5 @@
+{
+  "name": "SuperSafeFileMover",
+  "description": "A utility for moving and copying files with post-transfer checksum verification to ensure data integrity. Features a drag-and-drop interface with configurable destinations and detailed transaction logging.",
+  "requestFramePermissions": []
+}
