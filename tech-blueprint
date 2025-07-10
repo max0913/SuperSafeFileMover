@@ -1,0 +1,161 @@
+# **Technical Blueprint: SuperSafeFileMover**
+
+## **1.0 Project Statement**
+
+This document provides the technical specification for the "SuperSafeFileMover" application. Its purpose is to guide the development process by defining the architecture, components, data structures, and core logic required to build a robust and reliable file transfer utility with post-transfer verification.
+
+## **2.0 Core Architecture**
+
+### **2.1. Framework Selection**
+
+* **Framework:** Tauri (Rust Backend \+ Webview Frontend)  
+* **Rationale:**  
+  1. **Performance & Resource Efficiency:** Tauri produces a lightweight binary by leveraging the host OS's native web renderer (WebKit on macOS, WebView2 on Windows), avoiding the overhead of bundling a full browser engine like Electron.  
+  2. **Security:** The Rust backend provides memory safety and fine-grained control over what the frontend can access on the host system, reducing the attack surface.  
+  3. **Developer Experience:** Allows for the use of standard web technologies (HTML, CSS, JS) for the UI, leveraging existing skill sets, while using a powerful, modern systems language (Rust) for the core logic.  
+  4. **Cross-Platform:** Provides a clear path to compiling the same codebase for macOS, Windows, and Linux.
+
+## **3.0 Frontend Specification (View Layer)**
+
+The frontend is responsible for all user interaction and data presentation.
+
+### **3.1. Technology Stack**
+
+* **HTML5:** For semantic structure.  
+* **CSS3:** For styling. A minimalist, utility-first approach is recommended to maintain a clean, functional aesthetic.  
+* **JavaScript (ES6+):** For DOM manipulation and communication with the Rust backend. No large frontend framework (e.g., React, Vue) is necessary for the initial version to maintain simplicity.
+
+### **3.2. UI Components**
+
+1. **Main Window:** A single, fixed-size window.  
+2. **Destination View:** A container displaying the list of configurable drop zones.  
+3. **Drop Zone Component:** A distinct rectangular area for each destination.  
+   * **States:** Default, Hover (when dragging a file over it), Active/Processing.  
+   * **Content:** Displays the destination's user-defined name (e.g., "NAS Archive").  
+4. **Control Bar:** A section with buttons for user actions.  
+   * Add Destination button: Opens a modal or form to add a new destination.  
+   * Edit Destinations button: Toggles an edit mode for the destination list.  
+5. **Log/Status Panel:** A scrollable text area at the bottom of the window to display real-time output from ongoing transfers and a history of recent events.
+
+### **3.3. State Management**
+
+* A single JavaScript object will serve as the application's state store.  
+* **State Shape:**  
+  {  
+    destinations: \[  
+      { id: 'uuid1', name: 'NAS Photos', path: '/Volumes/Media/Photos' },  
+      { id: 'uuid2', name: 'Work Archive', path: '/Users/Max/Documents/Archive' }  
+    \],  
+    currentTransfers: \[  
+      { file: 'IMG\_1234.CR2', destinationId: 'uuid1', status: 'copying', progress: '15%' }  
+    \],  
+    logHistory: \[  
+      '2025-07-10 16:30:00 | INFO | Application started.'  
+    \]  
+  }
+
+* This state will be synchronized with the backend for persistence.
+
+## **4.0 Backend Specification (Logic Layer)**
+
+The Rust backend handles all core logic, file system interaction, and process execution.
+
+### **4.1. Technology Stack**
+
+* **Rust:** The primary language.  
+* **Tauri API:** For frontend-backend communication.  
+* **Serde:** For serializing and deserializing JSON data (for configuration).
+
+### **4.2. Core Tauri Commands (Functions exposed to JS)**
+
+1. async fn perform\_transfer(source\_paths: Vec\<String\>, destination\_path: String, move\_files: bool)  
+   * Receives a list of source file/folder paths and a single destination path.  
+   * Iterates through each source path.  
+   * Constructs and executes the appropriate rsync command using std::process::Command.  
+   * Streams stdout and stderr from the child process back to the frontend via Tauri events for the real-time log.  
+   * Returns a Result indicating overall success or failure.  
+2. async fn get\_config() \-\> Result\<String, String\>  
+   * Reads the config.json file from the application's config directory.  
+   * Returns the content as a JSON string.  
+3. async fn save\_config(config\_json: String) \-\> Result\<(), String\>  
+   * Receives a JSON string from the frontend.  
+   * Writes it to the config.json file, overwriting the previous version.  
+4. async fn open\_file\_dialog() \-\> Option\<String\>  
+   * Uses Tauri's native dialog API to allow the user to select a folder path.  
+   * Returns the selected path to the frontend.
+
+### **4.3. Process Execution Logic**
+
+* The std::process::Command module in Rust will be used to spawn rsync.  
+* **Command Structure (Copy):** rsync \-ahvc \--progress \<source\> \<destination\>  
+* **Command Structure (Move):** rsync \-ahvc \--progress \--remove-source-files \<source\> \<destination\>  
+* The command must be configured to capture both stdout and stderr to provide complete feedback to the user.
+
+## **5.0 Data Flow and Persistence**
+
+### **5.1. Application Startup Sequence**
+
+1. The Tauri application starts.  
+2. The frontend JS calls the get\_config backend command.  
+3. The backend reads config.json and returns it.  
+4. The frontend parses the JSON, populates its internal state, and renders the list of destination drop zones.
+
+### **5.2. File Transfer Sequence**
+
+1. User drags a file/folder onto a Drop Zone component in the UI.  
+2. The JS drop event listener captures the file path(s) and the ID of the target destination.  
+3. The frontend calls the perform\_transfer command, passing the source paths, the destination path, and whether it's a move operation.  
+4. The backend spawns an rsync process.  
+5. As rsync outputs progress, the backend captures it and emits a Tauri event (e.g., transfer-progress) with the log line.  
+6. The frontend listens for these events and appends the data to the Log/Status Panel.  
+7. Upon completion, the backend returns a final status, and the frontend updates the UI accordingly.
+
+### **5.3. Configuration Persistence**
+
+* All user-configurable data (i.e., the list of destinations) will be stored in a single config.json file.  
+* **Location:** The file will reside in the standard application configuration directory, managed by Tauri's PathResolver API. (e.g., \~/.config/com.supersafemover.dev/ on Linux).  
+* **Structure:**  
+  {  
+    "destinations": \[  
+      { "id": "...", "name": "...", "path": "..." }  
+    \]  
+  }
+
+## **6.0 Logging and Error Handling**
+
+### **6.1. User-Facing Log (in UI)**
+
+* This log is for real-time feedback and recent history. It should be clear and concise.
+
+### **6.2. Persistent File Log**
+
+* A text file (app.log) will be maintained in the application's log directory.  
+* **Format:** \[Timestamp\] \[LEVEL\] \- Message (e.g., \[2025-07-10T16:45:10Z\] \[ERROR\] \- rsync process exited with code 1.)  
+* This log will capture all backend events, errors, and the full, verbose output of every rsync command for auditing purposes.
+
+### **6.3. Error Handling**
+
+* The Rust backend should use Result\<T, E\> extensively.  
+* Backend errors (e.g., file not found, permissions denied, rsync failure) should be propagated to the frontend as structured error messages, not just generic failure codes.  
+* The frontend will display these errors to the user in a non-blocking modal dialog.
+
+## **7.0 Development Roadmap**
+
+1. **Phase 1: MVP (Minimum Viable Product)**  
+   * Set up the Tauri project.  
+   * Create a basic UI with a single, hardcoded drop zone.  
+   * Implement the perform\_transfer command for copy operations only.  
+   * Log output directly to the system console.  
+2. **Phase 2: Core Functionality**  
+   * Implement configuration persistence (config.json).  
+   * Build the UI for adding, editing, and deleting destinations.  
+   * Implement the Log/Status Panel in the UI and stream rsync output to it.  
+   * Implement the persistent file log (app.log).  
+3. **Phase 3: Feature Enhancement**  
+   * Add a toggle or separate drop zones for "move" (--remove-source-files) functionality.  
+   * Improve error handling with user-friendly dialogs.  
+   * Add UI feedback for transfers in progress (e.g., progress bars, visual state changes on drop zones).  
+4. **Phase 4: Polishing and Distribution**  
+   * Refine the UI/UX.  
+   * Address cross-platform compatibility, especially the rsync dependency on Windows (e.g., by bundling a compatible binary).  
+   * Create installers and packages for macOS, Windows, and Linux.
